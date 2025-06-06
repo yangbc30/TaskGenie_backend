@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import uuid
 import json
 from enum import Enum
@@ -36,6 +36,13 @@ class AIJobStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
+class TaskTag(str, Enum):
+    TODAY = "今日"
+    TOMORROW = "明日"
+    IMPORTANT = "重要"
+    COMPLETED = "已完成"
+    OVERDUE = "已过期"
+
 # ===== 数据模型 =====
 class Task(BaseModel):
     id: Optional[str] = None
@@ -49,6 +56,7 @@ class Task(BaseModel):
     estimated_hours: Optional[float] = None  # 预计所需小时数
     scheduled_date: Optional[date] = None  # 计划执行日期
     tags: Optional[List[str]] = []
+    task_tag: Optional[str] = TaskTag.TODAY  # 新增的任务标签
 
 class TaskCreate(BaseModel):
     name: str
@@ -58,6 +66,7 @@ class TaskCreate(BaseModel):
     estimated_hours: Optional[float] = None
     scheduled_date: Optional[date] = None
     tags: Optional[List[str]] = []
+    task_tag: Optional[str] = TaskTag.TODAY
 
 class TaskUpdate(BaseModel):
     name: Optional[str] = None
@@ -69,6 +78,7 @@ class TaskUpdate(BaseModel):
     estimated_hours: Optional[float] = None
     scheduled_date: Optional[date] = None
     tags: Optional[List[str]] = None
+    task_tag: Optional[str] = None
 
 class AITaskRequest(BaseModel):
     prompt: str
@@ -88,6 +98,38 @@ class AIJob(BaseModel):
 tasks_db: Dict[str, Task] = {}
 ai_jobs_db: Dict[str, AIJob] = {}
 
+# ===== 辅助函数 =====
+def auto_assign_task_tag(task: Task) -> str:
+    """根据任务状态自动分配标签"""
+    now = datetime.now()
+    today = now.date()
+    tomorrow = today + timedelta(days=1)
+    
+    # 如果任务已完成
+    if task.completed:
+        return TaskTag.COMPLETED
+    
+    # 如果任务已过期
+    if task.due_date and task.due_date.date() < today:
+        return TaskTag.OVERDUE
+    
+    # 如果是高优先级
+    if task.priority == "high":
+        return TaskTag.IMPORTANT
+    
+    # 如果明天到期
+    if task.due_date and task.due_date.date() == tomorrow:
+        return TaskTag.TOMORROW
+    
+    # 默认为今日
+    return TaskTag.TODAY
+
+def update_task_tag(task: Task):
+    """更新任务标签"""
+    # 如果用户没有手动设置标签，则自动分配
+    if not task.task_tag or task.task_tag == TaskTag.TODAY:
+        task.task_tag = auto_assign_task_tag(task)
+
 # ===== 基础任务操作 =====
 @app.post("/tasks", response_model=Task)
 async def create_task(task: TaskCreate):
@@ -102,13 +144,21 @@ async def create_task(task: TaskCreate):
         estimated_hours=task.estimated_hours,
         scheduled_date=task.scheduled_date,
         tags=task.tags,
+        task_tag=task.task_tag or TaskTag.TODAY,
     )
+    
+    # 自动分配标签
+    update_task_tag(new_task)
+    
     tasks_db[new_task.id] = new_task
     return new_task
 
 @app.get("/tasks", response_model=List[Task])
 async def get_all_tasks():
     """获取所有任务"""
+    # 更新所有任务的标签
+    for task in tasks_db.values():
+        update_task_tag(task)
     return list(tasks_db.values())
 
 @app.get("/tasks/{task_id}", response_model=Task)
@@ -116,7 +166,10 @@ async def get_task(task_id: str):
     """获取单个任务"""
     if task_id not in tasks_db:
         raise HTTPException(status_code=404, detail="任务不存在")
-    return tasks_db[task_id]
+    
+    task = tasks_db[task_id]
+    update_task_tag(task)
+    return task
 
 @app.put("/tasks/{task_id}", response_model=Task)
 async def update_task(task_id: str, task_update: TaskUpdate):
@@ -130,9 +183,13 @@ async def update_task(task_id: str, task_update: TaskUpdate):
     for field, value in update_data.items():
         setattr(task, field, value)
 
-    # 如果标记为完成，自动更新状态
+    # 如果标记为完成，自动更新状态和标签
     if task.completed and task.status != TaskStatus.COMPLETED:
         task.status = TaskStatus.COMPLETED
+        task.task_tag = TaskTag.COMPLETED
+
+    # 更新任务标签
+    update_task_tag(task)
 
     return task
 
@@ -154,6 +211,9 @@ async def get_calendar_tasks(year: int, month: int):
         if task.completed:
             continue
             
+        # 更新任务标签
+        update_task_tag(task)
+            
         # 检查截止日期
         if task.due_date:
             due_date = task.due_date.date()
@@ -172,6 +232,20 @@ async def get_calendar_tasks(year: int, month: int):
                 calendar_data[date_str]["scheduled"].append(task)
     
     return calendar_data
+
+# ===== 按标签获取任务 =====
+@app.get("/tasks/by-tag/{tag}")
+async def get_tasks_by_tag(tag: str):
+    """根据标签获取任务"""
+    if tag not in [TaskTag.TODAY, TaskTag.TOMORROW, TaskTag.IMPORTANT, TaskTag.COMPLETED, TaskTag.OVERDUE]:
+        raise HTTPException(status_code=400, detail="无效的标签")
+    
+    # 更新所有任务的标签
+    for task in tasks_db.values():
+        update_task_tag(task)
+    
+    filtered_tasks = [task for task in tasks_db.values() if task.task_tag == tag]
+    return filtered_tasks
 
 # ===== 异步 AI 功能 =====
 async def process_ai_planning(job_id: str, prompt: str, max_tasks: int):
@@ -200,13 +274,15 @@ async def process_ai_planning(job_id: str, prompt: str, max_tasks: int):
                     - priority: 优先级（high/medium/low）
                     - estimated_hours: 预计所需小时数
                     - due_date: 截止时间（ISO格式，如：2024-12-25T15:00:00）
+                    - task_tag: 任务标签（今日/明日/重要/已完成/已过期）
                     
                     重要规则：
                     1. 根据任务的紧急程度和依赖关系设置合理的截止时间
                     2. 如果用户提到"明天"、"后天"等相对时间，要转换为具体日期
                     3. 考虑任务的先后顺序，前置任务的截止时间要早于后续任务
-                    4. 紧急任务设置为high优先级，截止时间更近
+                    4. 紧急任务设置为high优先级，截止时间更近，标签设为"重要"
                     5. 所有时间都基于当前时间计算
+                    6. 根据截止时间合理设置task_tag：今天到期用"今日"，明天到期用"明日"，高优先级用"重要"
                     
                     请以JSON数组格式返回，确保返回的是有效的JSON。
                     """,
@@ -262,7 +338,12 @@ async def process_ai_planning(job_id: str, prompt: str, max_tasks: int):
                 priority=task_data.get("priority", "medium"),
                 estimated_hours=task_data.get("estimated_hours"),
                 due_date=due_date,
+                task_tag=task_data.get("task_tag", TaskTag.TODAY),
             )
+            
+            # 自动分配标签
+            update_task_tag(new_task)
+            
             tasks_db[new_task.id] = new_task
             created_tasks.append(new_task)
 
@@ -322,12 +403,16 @@ async def ai_schedule_tasks(request: AIScheduleRequest):
         # 准备任务信息
         tasks_info = []
         for task in tasks_to_schedule:
+            # 更新任务标签
+            update_task_tag(task)
+            
             task_info = {
                 "id": task.id,
                 "name": task.name,
                 "priority": task.priority,
                 "due_date": task.due_date.isoformat() if task.due_date else None,
                 "estimated_hours": task.estimated_hours,
+                "task_tag": task.task_tag,
                 "is_overdue": task.due_date and task.due_date < now if task.due_date else False
             }
             tasks_info.append(task_info)
@@ -357,6 +442,7 @@ async def ai_schedule_tasks(request: AIScheduleRequest):
                     3. 截止日期临近的任务优先
                     4. 每天工作时间不超过8小时
                     5. 考虑任务的预计时长，合理分配
+                    6. 参考任务的task_tag标签
                     
                     返回JSON格式：
                     {{
@@ -454,6 +540,11 @@ async def ai_schedule_tasks(request: AIScheduleRequest):
 async def get_stats():
     """获取任务统计信息"""
     all_tasks = list(tasks_db.values())
+    
+    # 更新所有任务的标签
+    for task in all_tasks:
+        update_task_tag(task)
+    
     completed = sum(1 for t in all_tasks if t.completed)
     
     # 计算今日到期任务
@@ -480,6 +571,13 @@ async def get_stats():
             "pending": sum(1 for t in all_tasks if t.status == TaskStatus.PENDING),
             "in_progress": sum(1 for t in all_tasks if t.status == TaskStatus.IN_PROGRESS),
             "completed": sum(1 for t in all_tasks if t.status == TaskStatus.COMPLETED),
+        },
+        "by_tag": {
+            "today": sum(1 for t in all_tasks if t.task_tag == TaskTag.TODAY),
+            "tomorrow": sum(1 for t in all_tasks if t.task_tag == TaskTag.TOMORROW),
+            "important": sum(1 for t in all_tasks if t.task_tag == TaskTag.IMPORTANT),
+            "completed": sum(1 for t in all_tasks if t.task_tag == TaskTag.COMPLETED),
+            "overdue": sum(1 for t in all_tasks if t.task_tag == TaskTag.OVERDUE),
         }
     }
 
