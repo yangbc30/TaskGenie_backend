@@ -1,5 +1,5 @@
 """
-数据模型定义
+数据模型定义 - 简化标签系统
 """
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Union, Any
@@ -18,18 +18,6 @@ class AIJobStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
 
-class TaskTag(str, Enum):
-    TODAY = "今日"
-    TOMORROW = "明日"
-    IMPORTANT = "重要"
-    URGENT = "紧急"
-    COMPLETED = "已完成"
-    OVERDUE = "已过期"
-    WORK = "工作"
-    PERSONAL = "个人"
-    LEARNING = "学习"
-    PROJECT = "项目"
-
 # ===== 任务相关模型 =====
 class Task(BaseModel):
     id: Optional[str] = None
@@ -42,9 +30,6 @@ class Task(BaseModel):
     priority: Optional[str] = "medium"  # low, medium, high
     estimated_hours: Optional[float] = None
     scheduled_date: Optional[date] = None
-    tags: Optional[List[str]] = []  # 保留原有tags字段
-    task_tags: Optional[List[str]] = []  # 多标签系统
-    original_tags: Optional[List[str]] = []  # 保存原始标签
 
 class TaskCreate(BaseModel):
     name: str
@@ -53,8 +38,6 @@ class TaskCreate(BaseModel):
     priority: Optional[str] = "medium"
     estimated_hours: Optional[float] = None
     scheduled_date: Optional[date] = None
-    tags: Optional[List[str]] = []
-    task_tags: Optional[List[str]] = []
 
 class TaskUpdate(BaseModel):
     name: Optional[str] = None
@@ -65,8 +48,6 @@ class TaskUpdate(BaseModel):
     priority: Optional[str] = None
     estimated_hours: Optional[float] = None
     scheduled_date: Optional[date] = None
-    tags: Optional[List[str]] = None
-    task_tags: Optional[List[str]] = None
 
 # ===== AI相关模型 =====
 class AITaskRequest(BaseModel):

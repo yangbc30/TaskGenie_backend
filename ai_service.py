@@ -1,6 +1,5 @@
 """
-AI服务模块
-处理任务规划和日程安排的AI功能
+AI服务模块 - 简化标签系统后的版本
 """
 import json
 import uuid
@@ -8,7 +7,7 @@ from typing import List, Dict, Any
 from datetime import datetime, timedelta
 from openai import OpenAI
 
-from models import Task, TaskTag, AIJob, AIJobStatus, DaySchedule, TaskScheduleItem
+from models import Task, AIJob, AIJobStatus, DaySchedule, TaskScheduleItem
 from database import db
 from tag_service import TagService
 
@@ -57,8 +56,7 @@ class AIService:
       "description": "详细的执行步骤和交付物描述",
       "priority": "high/medium/low",
       "estimated_hours": 2.0,
-      "due_date": "2024-12-25T18:00:00",
-      "task_tag": "今日/明日/重要"
+      "due_date": "2024-12-25T18:00:00"
     }}
   ]
 }}
@@ -242,7 +240,6 @@ class AIService:
                     days_offset = 4 + i * 2
                 
                 due_date = base_time + timedelta(days=days_offset)
-                due_date = base_time + timedelta(days=days_offset)
                 due_date = due_date.replace(hour=18, minute=0, second=0, microsecond=0)
                 
                 # 验证预估时间
@@ -255,7 +252,7 @@ class AIService:
                 
                 estimated_hours = max(0.5, min(6.0, float(estimated_hours)))
                 
-                # 创建任务对象
+                # 创建任务对象（不再需要标签相关字段）
                 new_task = Task(
                     id=str(uuid.uuid4()),
                     name=task_name,
@@ -264,12 +261,7 @@ class AIService:
                     priority=priority,
                     estimated_hours=estimated_hours,
                     due_date=due_date,
-                    task_tags=[],  # 初始为空，会被自动分配
-                    original_tags=[],
                 )
-                
-                # 自动分配标签
-                TagService.update_task_tags(new_task)
                 
                 # 保存到数据库
                 db.create_task(new_task)
@@ -288,10 +280,7 @@ class AIService:
                     priority="medium",
                     estimated_hours=2.0,
                     due_date=base_time + timedelta(days=i+1, hours=18),
-                    task_tags=[],
-                    original_tags=[],
                 )
-                TagService.update_task_tags(fallback_task)
                 db.create_task(fallback_task)
                 created_tasks.append(fallback_task)
 
@@ -407,7 +396,7 @@ class AIService:
 
     @staticmethod
     async def _generate_day_schedule(tasks: List[Task], target_date) -> dict:
-        """生成日程安排"""
+        """生成日程安排 - 修复版本"""
         # 准备任务信息供AI分析
         tasks_info = []
         for task in tasks:
@@ -418,12 +407,13 @@ class AIService:
                 "priority": task.priority,
                 "due_date": task.due_date.isoformat() if task.due_date else None,
                 "estimated_hours": task.estimated_hours or 2.0,
-                "task_tags": task.task_tags or [],
                 "is_overdue": task.due_date and task.due_date < datetime.now() if task.due_date else False
+                # 修复：移除对 task_tags 的引用
+                # "task_tags": task.task_tags or [],  # 删除这行
             }
             tasks_info.append(task_info)
         
-        # AI处理逻辑
+        # AI处理逻辑保持不变...
         now = datetime.now()
         weekday_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
         target_weekday = weekday_names[target_date.weekday()]

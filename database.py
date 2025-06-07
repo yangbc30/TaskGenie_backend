@@ -1,5 +1,5 @@
 """
-数据库操作模块
+数据库操作模块 - 简化标签系统后的版本
 目前使用内存存储，后续可以替换为真实数据库
 """
 from typing import Dict, List, Optional
@@ -39,19 +39,6 @@ class InMemoryDatabase:
             del self.tasks[task_id]
             return True
         return False
-    
-    def get_tasks_by_tags(self, tags: List[str]) -> List[Task]:
-        """根据标签筛选任务（AND逻辑）"""
-        if not tags:
-            return self.get_all_tasks()
-        
-        filtered_tasks = []
-        for task in self.tasks.values():
-            task_tags = task.task_tags or []
-            if all(tag in task_tags for tag in tags):
-                filtered_tasks.append(task)
-        
-        return filtered_tasks
     
     def get_tasks_for_date(self, target_date) -> List[Task]:
         """获取指定日期的任务"""
@@ -109,50 +96,6 @@ class InMemoryDatabase:
             del self.day_schedules[date_str]
             return True
         return False
-    
-    # ===== 统计操作 =====
-    def get_task_stats(self) -> dict:
-        """获取任务统计信息"""
-        from datetime import date
-        from models import TaskTag, TaskStatus
-        
-        all_tasks = self.get_all_tasks()
-        completed = sum(1 for t in all_tasks if t.completed)
-        
-        # 计算今日到期任务
-        today = date.today()
-        due_today = sum(1 for t in all_tasks 
-                        if t.due_date and t.due_date.date() == today and not t.completed)
-        
-        # 计算逾期任务
-        overdue = sum(1 for t in all_tasks 
-                      if t.due_date and t.due_date.date() < today and not t.completed)
-
-        # 统计各标签的任务数量
-        tag_stats = {}
-        for tag_enum in TaskTag:
-            tag_value = tag_enum.value
-            tag_stats[tag_value] = sum(1 for t in all_tasks 
-                                      if t.task_tags and tag_value in t.task_tags)
-
-        return {
-            "total": len(all_tasks),
-            "completed": completed,
-            "pending": len(all_tasks) - completed,
-            "due_today": due_today,
-            "overdue": overdue,
-            "by_priority": {
-                "high": sum(1 for t in all_tasks if t.priority == "high" and not t.completed),
-                "medium": sum(1 for t in all_tasks if t.priority == "medium" and not t.completed),
-                "low": sum(1 for t in all_tasks if t.priority == "low" and not t.completed),
-            },
-            "by_status": {
-                "pending": sum(1 for t in all_tasks if t.status == TaskStatus.PENDING),
-                "in_progress": sum(1 for t in all_tasks if t.status == TaskStatus.IN_PROGRESS),
-                "completed": sum(1 for t in all_tasks if t.status == TaskStatus.COMPLETED),
-            },
-            "by_tags": tag_stats
-        }
 
 # 全局数据库实例
 db = InMemoryDatabase()

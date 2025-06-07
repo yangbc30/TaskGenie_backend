@@ -1,12 +1,11 @@
 """
-任务服务模块
-处理任务的CRUD操作和业务逻辑
+任务服务模块 - 简化标签系统后的版本
 """
 import uuid
 from typing import List, Optional
 from datetime import datetime, date, timedelta
 
-from models import Task, TaskCreate, TaskUpdate, TaskStatus, TaskTag
+from models import Task, TaskCreate, TaskUpdate, TaskStatus
 from database import db
 from tag_service import TagService
 
@@ -23,46 +22,31 @@ class TaskService:
             priority=task_data.priority,
             estimated_hours=task_data.estimated_hours,
             scheduled_date=task_data.scheduled_date,
-            tags=task_data.tags,
-            task_tags=task_data.task_tags or [],
-            original_tags=[],
         )
-        
-        # 如果没有指定标签，自动分配标签
-        if not new_task.task_tags:
-            new_task.task_tags = TagService.auto_assign_task_tags(new_task)
-        else:
-            # 如果有指定标签，合并自动标签
-            auto_tags = TagService.auto_assign_task_tags(new_task)
-            new_task.task_tags = list(set(new_task.task_tags + auto_tags))
         
         return db.create_task(new_task)
 
     @staticmethod
     def get_task(task_id: str) -> Optional[Task]:
         """获取单个任务"""
-        task = db.get_task(task_id)
-        if task:
-            TagService.update_task_tags(task)
-        return task
+        return db.get_task(task_id)
 
     @staticmethod
     def get_all_tasks() -> List[Task]:
         """获取所有任务"""
-        tasks = db.get_all_tasks()
-        # 更新所有任务的标签
-        for task in tasks:
-            TagService.update_task_tags(task)
-        return tasks
+        return db.get_all_tasks()
 
     @staticmethod
     def get_tasks_by_tags(tags: List[str]) -> List[Task]:
         """根据标签筛选任务"""
-        tasks = db.get_tasks_by_tags(tags)
-        # 更新所有任务的标签
-        for task in tasks:
-            TagService.update_task_tags(task)
-        return tasks
+        all_tasks = db.get_all_tasks()
+        return TagService.get_tasks_by_tags(all_tasks, tags)
+
+    @staticmethod
+    def get_tasks_by_tag(tag: str) -> List[Task]:
+        """根据单个标签获取任务"""
+        all_tasks = db.get_all_tasks()
+        return TagService.get_tasks_by_tag(all_tasks, tag)
 
     @staticmethod
     def update_task(task_id: str, task_update: TaskUpdate) -> Optional[Task]:
@@ -71,23 +55,16 @@ class TaskService:
         if not task:
             return None
 
-        # 记录更新前的状态
-        was_completed = task.completed
-        
         # 应用更新
         update_data = task_update.dict(exclude_unset=True)
         for field, value in update_data.items():
             setattr(task, field, value)
 
         # 如果完成状态发生变化，更新相关状态
-        if task.completed != was_completed:
-            if task.completed:
-                task.status = TaskStatus.COMPLETED
-            else:
-                task.status = TaskStatus.PENDING
-
-        # 更新任务标签
-        TagService.update_task_tags(task)
+        if task.completed:
+            task.status = TaskStatus.COMPLETED
+        else:
+            task.status = TaskStatus.PENDING
 
         return db.update_task(task_id, task)
 
@@ -105,9 +82,6 @@ class TaskService:
         for task in tasks:
             if task.completed:
                 continue
-                
-            # 更新任务标签
-            TagService.update_task_tags(task)
                 
             # 检查截止日期
             if task.due_date:
@@ -129,25 +103,35 @@ class TaskService:
         return calendar_data
 
     @staticmethod
-    def get_tasks_by_tag(tag: str) -> List[Task]:
-        """根据单个标签获取任务（兼容旧接口）"""
-        if tag not in [tag_enum.value for tag_enum in TaskTag]:
-            return []
-        
-        tasks = db.get_all_tasks()
-        # 更新所有任务的标签
-        for task in tasks:
-            TagService.update_task_tags(task)
-        
-        filtered_tasks = [task for task in tasks if task.task_tags and tag in task.task_tags]
-        return filtered_tasks
-
-    @staticmethod
     def get_task_stats() -> dict:
         """获取任务统计信息"""
-        # 先更新所有任务的标签
         tasks = db.get_all_tasks()
-        for task in tasks:
-            TagService.update_task_tags(task)
+        completed = sum(1 for t in tasks if t.completed)
         
-        return db.get_task_stats()
+        # 计算今日到期任务
+        today = date.today()
+        due_today = sum(1 for t in tasks 
+                        if t.due_date and t.due_date.date() == today and not t.completed)
+        
+        # 计算逾期任务
+        overdue = sum(1 for t in tasks 
+                      if t.due_date and t.due_date.date() < today and not t.completed)
+
+        return {
+            "total": len(tasks),
+            "completed": completed,
+            "pending": len(tasks) - completed,
+            "due_today": due_today,
+            "overdue": overdue,
+            "by_priority": {
+                "high": sum(1 for t in tasks if t.priority == "high" and not t.completed),
+                "medium": sum(1 for t in tasks if t.priority == "medium" and not t.completed),
+                "low": sum(1 for t in tasks if t.priority == "low" and not t.completed),
+            },
+            "by_status": {
+                "pending": sum(1 for t in tasks if t.status == TaskStatus.PENDING),
+                "in_progress": sum(1 for t in tasks if t.status == TaskStatus.IN_PROGRESS),
+                "completed": sum(1 for t in tasks if t.status == TaskStatus.COMPLETED),
+            },
+            "by_tags": TagService.get_tag_stats(tasks)
+        }

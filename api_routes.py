@@ -1,6 +1,5 @@
 """
-API路由模块
-定义所有的API端点
+API路由模块 - 修复标签系统后的版本
 """
 import uuid
 from fastapi import APIRouter, HTTPException, BackgroundTasks
@@ -175,7 +174,7 @@ async def delete_day_schedule(date: str):
 
 @ai_router.get("/schedule-day/{date}")
 async def get_day_schedule_preview(date: str):
-    """获取指定日期的任务预览"""
+    """获取指定日期的任务预览 - 修复版本"""
     try:
         target_date = datetime.strptime(date, "%Y-%m-%d").date()
     except ValueError:
@@ -202,7 +201,8 @@ async def get_day_schedule_preview(date: str):
                 "priority": task.priority,
                 "estimated_hours": task.estimated_hours or 2.0,
                 "due_date": task.due_date.isoformat() if task.due_date else None,
-                "task_tags": task.task_tags
+                # 修复：移除对 task.task_tags 的引用
+                # 现在标签是动态计算的，不存储在任务对象中
             }
             for task in day_tasks
         ]
