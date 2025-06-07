@@ -646,8 +646,16 @@ async def get_ai_job_status(job_id: str):
     return ai_jobs_db[job_id]
 
 # ===== 其他AI功能 =====
+# 在 main.py 中需要更新的完整部分
+
+# 首先更新 AITaskRequest 模型，支持自定义任务数量
+class AITaskRequest(BaseModel):
+    prompt: str
+    max_tasks: int = 5  # 默认5个任务，支持1-10个
+
+# 更新后的完整 process_ai_planning 函数
 async def process_ai_planning(job_id: str, prompt: str, max_tasks: int):
-    """后台处理 AI 任务规划"""
+    """后台处理 AI 任务规划 - 优化版本，生成更具体可行的任务"""
     try:
         # 获取当前时间信息
         now = datetime.now()
@@ -655,107 +663,285 @@ async def process_ai_planning(job_id: str, prompt: str, max_tasks: int):
         weekday_names = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
         current_weekday = weekday_names[now.weekday()]
         
+        # 根据目标类型调整提示词策略
+        prompt_analysis = prompt.lower()
+        task_type = "general"
+        
+        if any(keyword in prompt_analysis for keyword in ["学习", "掌握", "了解", "研究"]):
+            task_type = "learning"
+        elif any(keyword in prompt_analysis for keyword in ["开发", "编程", "制作", "创建", "设计"]):
+            task_type = "development"
+        elif any(keyword in prompt_analysis for keyword in ["准备", "策划", "组织", "安排"]):
+            task_type = "planning"
+        elif any(keyword in prompt_analysis for keyword in ["写", "撰写", "完成", "提交"]):
+            task_type = "writing"
+        
+        # 根据任务类型调整具体的指导原则
+        type_specific_guidance = {
+            "learning": """
+**学习类任务特殊要求**：
+- 将知识点分解为具体的学习单元
+- 每个任务应包含明确的学习材料和练习
+- 设置循序渐进的难度梯度
+- 包含实践和验证环节""",
+            
+            "development": """
+**开发类任务特殊要求**：
+- 按照软件开发生命周期分解
+- 每个任务应有明确的技术实现目标
+- 包含测试和验证步骤
+- 考虑技术依赖关系""",
+            
+            "planning": """
+**策划类任务特殊要求**：
+- 按照项目管理流程分解
+- 包含调研、准备、执行、总结阶段
+- 每个任务应有具体的交付物
+- 考虑资源和时间约束""",
+            
+            "writing": """
+**写作类任务特殊要求**：
+- 按照写作流程分解（构思-大纲-初稿-修改-定稿）
+- 每个任务应有明确的字数或篇幅目标
+- 包含研究和素材收集环节
+- 设置审核和优化步骤"""
+        }
+        
+        current_guidance = type_specific_guidance.get(task_type, "")
+        
         response = client.chat.completions.create(
             model="Qwen/Qwen2.5-7B-Instruct",
             messages=[
                 {
                     "role": "system",
-                    "content": f"""你是一个任务规划助手。根据用户的描述，将其分解为具体的任务步骤。
-                    
-                    当前时间：{current_date_str} {current_weekday}
-                    
-                    限制：最多生成 {max_tasks} 个任务。
-                    
-                    每个任务应该包含：
-                    - name: 任务名称（简短明确）
-                    - description: 任务描述（详细说明）
-                    - priority: 优先级（high/medium/low）
-                    - estimated_hours: 预计所需小时数
-                    - due_date: 截止时间（ISO格式，如：2024-12-25T15:00:00）
-                    - task_tag: 任务标签（今日/明日/重要/已完成/已过期）
-                    
-                    重要规则：
-                    1. 根据任务的紧急程度和依赖关系设置合理的截止时间
-                    2. 如果用户提到"明天"、"后天"等相对时间，要转换为具体日期
-                    3. 考虑任务的先后顺序，前置任务的截止时间要早于后续任务
-                    4. 紧急任务设置为high优先级，截止时间更近，标签设为"重要"
-                    5. 所有时间都基于当前时间计算
-                    6. 根据截止时间合理设置task_tag：今天到期用"今日"，明天到期用"明日"，高优先级用"重要"
-                    
-                    请以JSON数组格式返回，确保返回的是有效的JSON。
-                    """,
+                    "content": f"""你是一个专业的任务分解和项目管理专家。你需要为用户的目标生成一个项目主题和具体的子任务。
+
+当前时间：{current_date_str} {current_weekday}
+任务数量限制：严格生成 {max_tasks} 个任务（不多不少）
+识别的任务类型：{task_type}
+
+{current_guidance}
+
+**输出格式要求**：
+请按以下JSON格式返回，包含一个项目主题和任务列表：
+```json
+{{
+  "project_theme": "项目主题名称（5-15字）",
+  "tasks": [
+    {{
+      "name": "具体的子任务名称",
+      "description": "详细的执行步骤和交付物描述",
+      "priority": "high/medium/low",
+      "estimated_hours": 2.0,
+      "due_date": "2024-12-25T18:00:00",
+      "task_tag": "今日/明日/重要"
+    }}
+  ]
+}}
+```
+
+**项目主题要求**：
+- 5-15字的简洁描述
+- 概括整个目标的核心内容
+- 便于用户快速识别项目范围
+- 例如："React Native学习计划"、"生日派对策划"、"项目报告撰写"
+
+**子任务命名规则**：
+- 每个子任务名称要具体明确
+- 不需要包含step序号（系统会自动添加）
+- 使用动词开头，描述具体行动
+- 例如："搭建开发环境"、"学习基础语法"、"制作登录界面"
+
+**核心原则（必须严格遵守）**：
+1. **具体性**：每个任务都必须是具体的行动，包含明确的执行步骤
+2. **可执行性**：任务描述要详细到任何人都能理解如何开始
+3. **可衡量性**：必须有明确的完成标准
+4. **时间合理性**：单个任务建议在0.5-6小时内完成
+5. **逻辑顺序**：任务间要有合理的先后顺序
+6. **行动导向**：每个任务名称必须以动词开头
+
+**时间设置策略**：
+- 第1个任务（最高优先级）：明天18:00
+- 第2-3个任务：后天到第4天
+- 后续任务：第5-14天内合理分布
+- 确保任务间有足够的执行间隔
+
+请生成严格符合以上要求的项目主题和 {max_tasks} 个子任务。""",
                 },
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": f"请为以下目标生成项目主题和分解任务：{prompt}"},
             ],
-            temperature=0.7,
-            max_tokens=500,
+            temperature=0.6,
+            max_tokens=1500,
         )
 
         # 解析 AI 返回的内容
         content = response.choices[0].message.content
+        print(f"AI原始返回内容: {content[:200]}...")
+        
         # 尝试提取 JSON 部分
-        start_idx = content.find('[')
-        end_idx = content.rfind(']') + 1
+        start_idx = content.find('{')
+        end_idx = content.rfind('}') + 1
         if start_idx != -1 and end_idx > start_idx:
             json_content = content[start_idx:end_idx]
-            ai_tasks = json.loads(json_content)
+            ai_result = json.loads(json_content)
         else:
-            ai_tasks = json.loads(content)
+            # 如果没有找到完整JSON，尝试解析为数组格式（兼容旧格式）
+            start_idx = content.find('[')
+            end_idx = content.rfind(']') + 1
+            if start_idx != -1 and end_idx > start_idx:
+                json_content = content[start_idx:end_idx]
+                ai_tasks = json.loads(json_content)
+                ai_result = {"project_theme": f"AI规划项目", "tasks": ai_tasks}
+            else:
+                raise Exception("无法解析AI返回的JSON格式")
+        
+        # 提取项目主题和任务列表
+        project_theme = ai_result.get("project_theme", "AI规划项目")
+        ai_tasks = ai_result.get("tasks", [])
+        
+        if len(ai_tasks) == 0:
+            raise Exception("AI未能生成有效的任务列表")
 
-        # 限制任务数量
+        # 严格限制任务数量
         ai_tasks = ai_tasks[:max_tasks]
+        
+        print(f"项目主题: {project_theme}")
+        print(f"生成任务数: {len(ai_tasks)}")
 
-        # 创建任务并保存
+        # 验证和优化任务数据
         created_tasks = []
-        for task_data in ai_tasks:
-            # 处理due_date，确保是有效的ISO格式
-            due_date_str = task_data.get("due_date")
-            due_date = None
-            if due_date_str:
-                try:
-                    # 尝试解析AI返回的日期
-                    due_date = datetime.fromisoformat(due_date_str.replace('Z', '+00:00'))
-                except:
-                    # 如果解析失败，尝试其他格式或使用默认值
+        base_time = datetime.now()
+        
+        for i, task_data in enumerate(ai_tasks):
+            try:
+                # 验证必需字段
+                if not task_data.get("name"):
+                    task_data["name"] = f"执行步骤{i+1}：{prompt}的相关任务"
+                
+                # 生成带主题和步骤的任务名称
+                original_name = task_data.get("name", "").strip()
+                
+                # 确保名称以动词开头
+                action_verbs = ["创建", "编写", "设计", "调研", "实现", "测试", "整理", "分析", "学习", "准备", "完成", "制作", "搭建", "配置", "安装"]
+                if not any(original_name.startswith(verb) for verb in action_verbs):
+                    original_name = f"完成{original_name}"
+                
+                # 构建最终的任务名称：项目主题 + Step{i} + 子任务名称
+                task_name = f"{project_theme} Step{i+1}：{original_name}"
+                
+                # 优化描述
+                description = task_data.get("description", "").strip()
+                if len(description) < 30:
+                    description = f"具体执行：{description}。请根据实际情况制定详细的执行计划和验收标准。"
+                
+                # 处理优先级
+                priority = task_data.get("priority", "medium")
+                if priority not in ["high", "medium", "low"]:
+                    priority = "medium"
+                
+                # 根据任务序号和优先级设置截止时间
+                if priority == "high" or i == 0:  # 第一个任务或高优先级
+                    days_offset = 1 + i * 0.5
+                elif priority == "medium":
+                    days_offset = 2 + i * 1.5
+                else:  # low priority
+                    days_offset = 4 + i * 2
+                
+                due_date = base_time + timedelta(days=days_offset)
+                due_date = due_date.replace(hour=18, minute=0, second=0, microsecond=0)
+                
+                # 验证预估时间
+                estimated_hours = task_data.get("estimated_hours", 2.0)
+                if isinstance(estimated_hours, str):
                     try:
-                        due_date = datetime.strptime(due_date_str, "%Y-%m-%dT%H:%M:%S")
+                        estimated_hours = float(estimated_hours)
                     except:
-                        # 如果还是失败，根据优先级设置默认截止时间
-                        if task_data.get("priority") == "high":
-                            due_date = datetime.now() + timedelta(days=1)
-                        elif task_data.get("priority") == "medium":
-                            due_date = datetime.now() + timedelta(days=3)
-                        else:
-                            due_date = datetime.now() + timedelta(days=7)
-            
-            new_task = Task(
-                id=str(uuid.uuid4()),
-                name=task_data.get("name", "未命名任务"),
-                description=task_data.get("description", ""),
-                created_at=datetime.now(),
-                priority=task_data.get("priority", "medium"),
-                estimated_hours=task_data.get("estimated_hours"),
-                due_date=due_date,
-                task_tag=task_data.get("task_tag", TaskTag.TODAY),
-            )
-            
-            # 自动分配标签
-            update_task_tag(new_task)
-            
-            tasks_db[new_task.id] = new_task
-            created_tasks.append(new_task)
+                        estimated_hours = 2.0
+                
+                # 确保预估时间合理
+                estimated_hours = max(0.5, min(6.0, float(estimated_hours)))
+                
+                # 创建任务对象
+                new_task = Task(
+                    id=str(uuid.uuid4()),
+                    name=task_name,  # 使用带主题和步骤的名称
+                    description=description,
+                    created_at=datetime.now(),
+                    priority=priority,
+                    estimated_hours=estimated_hours,
+                    due_date=due_date,
+                    task_tag=TaskTag.TODAY,  # 初始标签，会被自动更新
+                )
+                
+                # 自动分配标签
+                update_task_tag(new_task)
+                
+                # 保存到数据库
+                tasks_db[new_task.id] = new_task
+                created_tasks.append(new_task)
+                
+                print(f"创建任务 {i+1}/{max_tasks}: {new_task.name}")
+                
+            except Exception as task_error:
+                print(f"处理任务 {i+1} 时出错: {task_error}")
+                # 创建一个基础任务作为后备
+                fallback_task = Task(
+                    id=str(uuid.uuid4()),
+                    name=f"{project_theme} Step{i+1}：完成目标的第{i+1}个步骤",
+                    description=f"根据目标'{prompt}'，完成相应的第{i+1}个具体行动步骤。请细化具体的执行方案。",
+                    created_at=datetime.now(),
+                    priority="medium",
+                    estimated_hours=2.0,
+                    due_date=base_time + timedelta(days=i+1, hours=18),
+                    task_tag=TaskTag.TODAY,
+                )
+                update_task_tag(fallback_task)
+                tasks_db[fallback_task.id] = fallback_task
+                created_tasks.append(fallback_task)
 
-        # 更新任务状态 - 返回字典格式保持兼容性
+        # 确保至少创建了一个任务
+        if len(created_tasks) == 0:
+            # 创建一个默认任务
+            default_task = Task(
+                id=str(uuid.uuid4()),
+                name=f"{project_theme} Step1：开始执行计划",
+                description=f"针对目标'{prompt}'，制定详细的执行计划并开始第一步行动。",
+                created_at=datetime.now(),
+                priority="high",
+                estimated_hours=2.0,
+                due_date=base_time + timedelta(days=1, hours=18),
+                task_tag=TaskTag.TODAY,
+            )
+            update_task_tag(default_task)
+            tasks_db[default_task.id] = default_task
+            created_tasks.append(default_task)
+
+        # 更新AI作业状态
         ai_jobs_db[job_id].status = AIJobStatus.COMPLETED
         ai_jobs_db[job_id].result = [task.dict() for task in created_tasks]
+        
+        print(f"✅ AI任务规划完成")
+        print(f"   项目主题: {project_theme}")
+        print(f"   生成任务: {len(created_tasks)} 个")
+        for i, task in enumerate(created_tasks):
+            print(f"   {i+1}. {task.name}")
 
-    except Exception as e:
+    except json.JSONDecodeError as e:
+        error_msg = f"AI返回的JSON格式错误: {str(e)}"
+        print(error_msg)
         ai_jobs_db[job_id].status = AIJobStatus.FAILED
-        ai_jobs_db[job_id].error = str(e)
+        ai_jobs_db[job_id].error = error_msg
+    except Exception as e:
+        error_msg = f"AI任务规划失败: {str(e)}"
+        print(error_msg)
+        ai_jobs_db[job_id].status = AIJobStatus.FAILED
+        ai_jobs_db[job_id].error = error_msg
 
+
+# 更新的API端点
 @app.post("/ai/plan-tasks/async")
 async def ai_plan_tasks_async(request: AITaskRequest, background_tasks: BackgroundTasks):
-    """异步 AI 任务规划"""
+    """异步 AI 任务规划 - 支持自定义任务数量，生成更具体可行的任务"""
     job_id = str(uuid.uuid4())
     job = AIJob(
         job_id=job_id,
@@ -764,10 +950,52 @@ async def ai_plan_tasks_async(request: AITaskRequest, background_tasks: Backgrou
     )
     ai_jobs_db[job_id] = job
     
-    # 添加后台任务
-    background_tasks.add_task(process_ai_planning, job_id, request.prompt, request.max_tasks)
+    # 验证和规范化任务数量
+    max_tasks = max(1, min(10, request.max_tasks))  # 严格限制在1-10之间
     
-    return {"job_id": job_id, "status": "processing"}
+    print(f"🚀 开始AI任务规划")
+    print(f"   目标: {request.prompt}")
+    print(f"   任务数量: {max_tasks}")
+    print(f"   作业ID: {job_id}")
+    
+    # 添加后台任务
+    background_tasks.add_task(process_ai_planning, job_id, request.prompt, max_tasks)
+    
+    return {
+        "job_id": job_id, 
+        "status": "processing",
+        "max_tasks": max_tasks,
+        "message": f"AI正在为您分析目标并生成{max_tasks}个具体可执行的任务，预计需要10-30秒"
+    }
+
+
+# 添加一个测试端点，用于验证AI规划功能
+@app.post("/ai/plan-tasks/test")
+async def test_ai_planning(prompt: str = "学习React Native开发", max_tasks: int = 3):
+    """测试AI任务规划功能"""
+    job_id = str(uuid.uuid4())
+    
+    try:
+        await process_ai_planning(job_id, prompt, max_tasks)
+        
+        if job_id in ai_jobs_db:
+            job = ai_jobs_db[job_id]
+            if job.status == AIJobStatus.COMPLETED:
+                return {
+                    "success": True,
+                    "tasks_created": len(job.result) if job.result else 0,
+                    "tasks": job.result
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": job.error
+                }
+        else:
+            return {"success": False, "error": "作业未找到"}
+            
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 @app.post("/ai/schedule-tasks", response_model=Dict[str, List[Task]])
 async def ai_schedule_tasks(request: AIScheduleRequest):
